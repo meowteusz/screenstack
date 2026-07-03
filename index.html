@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>screenstack</title>
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --panel: #16181a;
+    --line: #2c3033;
+    --text: #c6ccd2;
+    --dim: #767e86;
+    --accent: #cc4517;
+    --accent-ink: #fff3ec;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---- top bar ---- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    flex: none;
+  }
+  header h1 {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  header h1::before { content: "["; color: var(--accent); }
+  header h1::after  { content: "]"; color: var(--accent); }
+  #readout {
+    margin-left: auto;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  #export {
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--accent);
+    border: none;
+    border-radius: 3px;
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  #export:disabled {
+    background: var(--panel);
+    color: var(--dim);
+    cursor: default;
+  }
+  #export:not(:disabled):hover {
+    filter: brightness(1.12);
+    box-shadow: 0 0 14px rgba(204, 69, 23, 0.45);
+  }
+  #clear {
+    font: inherit;
+    color: var(--dim);
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  #clear:hover { color: var(--text); border-color: var(--dim); }
+  #clear[hidden] { display: none; }
+
+  /* ---- main area ---- */
+  main {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px 64px;
+  }
+
+  /* drop zone, styled as an idle mpv window */
+  #dropzone {
+    width: min(720px, 100%);
+    height: min(405px, 60vh);
+    align-self: center;
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+  #dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #dropzone .osd { font-size: 15px; }
+  #dropzone .hint { color: var(--dim); }
+  #dropzone .seekbar {
+    position: absolute;
+    left: 12px; right: 12px; bottom: 12px;
+    height: 3px;
+    background: var(--line);
+  }
+  #dropzone .seekbar::after {
+    content: "";
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--text);
+    transition: width 0.25s ease;
+  }
+  body.dragging #dropzone { border-color: var(--accent); }
+  body.dragging #dropzone .seekbar::after { width: 100%; background: var(--accent); }
+  #dropzone[hidden] { display: none; }
+
+  /* the stack */
+  #stack {
+    width: min(480px, 100%);
+    align-self: flex-start;
+    border: 1px solid var(--line);
+    font-size: 0; /* kill inline-image gaps */
+  }
+  #stack[hidden] { display: none; }
+  .frame { position: relative; }
+  .frame img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .frame .bar {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    background: rgba(0, 0, 0, 0.75);
+    color: var(--text);
+    opacity: 0;
+  }
+  .frame:hover .bar, .frame:focus-within .bar { opacity: 1; }
+  .frame .name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--dim);
+  }
+  .frame .bar button {
+    font: inherit;
+    color: var(--text);
+    background: none;
+    border: none;
+    padding: 2px 6px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .frame .bar button:hover { background: rgba(255, 255, 255, 0.15); }
+  .frame .bar button:focus-visible { outline: 1px solid var(--accent); }
+
+  body.dragging #stack { outline: 2px dashed var(--accent); outline-offset: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #dropzone .seekbar::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>screenstack</h1>
+  <span id="readout"></span>
+  <button id="clear" hidden>clear</button>
+  <button id="export" disabled>export png</button>
+</header>
+
+<main>
+  <div id="dropzone" role="button" tabindex="0" aria-label="Add screenshots">
+    <div class="osd">drop frames here</div>
+    <div class="hint">or click to browse &middot; sorted by filename</div>
+    <div class="seekbar"></div>
+  </div>
+  <div id="stack" hidden></div>
+</main>
+
+<input type="file" id="picker" accept="image/*" multiple hidden>
+
+<script>
+  const dropzone = document.getElementById("dropzone");
+  const stackEl  = document.getElementById("stack");
+  const picker   = document.getElementById("picker");
+  const exportBtn = document.getElementById("export");
+  const clearBtn  = document.getElementById("clear");
+  const readout   = document.getElementById("readout");
+
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  let frames = []; // { name, img }
+
+  // --- adding files ---
+  async function addFiles(fileList) {
+    const files = [...fileList].filter(f => f.type.startsWith("image/"));
+    if (!files.length) return;
+    const loaded = await Promise.all(files.map(f => new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve({ name: f.name, img });
+      img.onerror = () => resolve(null);
+      img.src = URL.createObjectURL(f);
+    })));
+    frames.push(...loaded.filter(Boolean));
+    frames.sort((a, b) => collator.compare(a.name, b.name));
+    render();
+  }
+
+  // --- rendering ---
+  function render() {
+    stackEl.textContent = "";
+    frames.forEach((frame, i) => {
+      const div = document.createElement("div");
+      div.className = "frame";
+      div.appendChild(frame.img);
+
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = frame.name;
+      bar.appendChild(name);
+
+      const actions = [
+        ["↑", "move up",   () => move(i, -1)],
+        ["↓", "move down", () => move(i, +1)],
+        ["⧉", "duplicate", () => duplicate(i)],
+        ["✕", "remove",    () => remove(i)],
+      ];
+      for (const [glyph, label, fn] of actions) {
+        const b = document.createElement("button");
+        b.textContent = glyph;
+        b.title = label;
+        b.setAttribute("aria-label", label);
+        b.addEventListener("click", fn);
+        bar.appendChild(b);
+      }
+      div.appendChild(bar);
+      stackEl.appendChild(div);
+    });
+
+    const empty = frames.length === 0;
+    dropzone.hidden = !empty;
+    stackEl.hidden = empty;
+    clearBtn.hidden = empty;
+    exportBtn.disabled = empty;
+
+    if (empty) {
+      readout.textContent = "";
+    } else {
+      const w = Math.max(...frames.map(f => f.img.naturalWidth));
+      const h = frames.reduce((sum, f) => sum + f.img.naturalHeight, 0);
+      readout.textContent = `${frames.length} frame${frames.length === 1 ? "" : "s"} · ${w}×${h}`;
+    }
+  }
+
+  function move(i, delta) {
+    const j = i + delta;
+    if (j < 0 || j >= frames.length) return;
+    [frames[i], frames[j]] = [frames[j], frames[i]];
+    render();
+  }
+  function duplicate(i) {
+    const clone = { name: frames[i].name, img: frames[i].img.cloneNode() };
+    frames.splice(i + 1, 0, clone);
+    render();
+  }
+  function remove(i) {
+    frames.splice(i, 1);
+    render();
+  }
+
+  // --- export ---
+  exportBtn.addEventListener("click", () => {
+    const w = Math.max(...frames.map(f => f.img.naturalWidth));
+    const h = frames.reduce((sum, f) => sum + f.img.naturalHeight, 0);
+    if (h > 32000) {
+      alert(`Output is ${h}px tall — beyond the ~32k canvas limit. Remove some frames.`);
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    let y = 0;
+    for (const f of frames) {
+      ctx.drawImage(f.img, Math.round((w - f.img.naturalWidth) / 2), y);
+      y += f.img.naturalHeight;
+    }
+    canvas.toBlob(blob => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `screenstack-${frames.length}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, "image/png");
+  });
+
+  clearBtn.addEventListener("click", () => { frames = []; render(); });
+
+  // --- input plumbing ---
+  dropzone.addEventListener("click", () => picker.click());
+  dropzone.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); picker.click(); }
+  });
+  picker.addEventListener("change", () => { addFiles(picker.files); picker.value = ""; });
+
+  let dragDepth = 0;
+  document.addEventListener("dragenter", e => {
+    e.preventDefault();
+    dragDepth++;
+    document.body.classList.add("dragging");
+  });
+  document.addEventListener("dragover", e => e.preventDefault());
+  document.addEventListener("dragleave", () => {
+    if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); }
+  });
+  document.addEventListener("drop", e => {
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove("dragging");
+    addFiles(e.dataTransfer.files);
+  });
+</script>
+</body>
+</html>
